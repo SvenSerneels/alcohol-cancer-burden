@@ -9,6 +9,9 @@ __pycache__/
 # Re-downloadable NHANES cache (rebuilt by src/nhanes_pipeline.py)
 data/nhanes/
 
+# HRS data — NOT redistributable under the HRS user agreement. Never track/push.
+data/hrs/
+
 # Local Claude Code settings & scratch
 .claude/settings.local.json
 *.log
