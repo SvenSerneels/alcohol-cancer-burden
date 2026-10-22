@@ -65,13 +65,29 @@ DIET_COLS = ["SEQN", "DR1DRSTZ", "DR1TKCAL", "DR1TALCO",
 SMQ_COLS = ["SEQN", "SMQ020", "SMQ040"]
 BMX_COLS = ["SEQN", "BMXBMI"]
 
-# Continuous exposures we estimate HRs for (energy-adjusted downstream).
+# Dietary exposures (energy-adjusted downstream via the Willett residual method).
 EXPOSURES = {
-    "alcohol_g":  dict(col="DR1TALCO", label="Alcohol",       per=10,  unit="g/day"),
-    "sugar_g":    dict(col="DR1TSUGR", label="Total sugars",  per=50,  unit="g/day"),
-    "totfat_g":   dict(col="DR1TTFAT", label="Total fat",     per=25,  unit="g/day"),
-    "satfat_g":   dict(col="DR1TSFAT", label="Saturated fat", per=10,  unit="g/day"),
+    "alcohol_g":  dict(col="DR1TALCO", label="Alcohol",       per=10,  unit="g/day", transform="energy_adj"),
+    "sugar_g":    dict(col="DR1TSUGR", label="Total sugars",  per=50,  unit="g/day", transform="energy_adj"),
+    "totfat_g":   dict(col="DR1TTFAT", label="Total fat",     per=25,  unit="g/day", transform="energy_adj"),
+    "satfat_g":   dict(col="DR1TSFAT", label="Saturated fat", per=10,  unit="g/day", transform="energy_adj"),
 }
+
+# Environmental / psychosocial exposures, each from its own NHANES component and
+# subsample (so they get their own analytic cohort, not merged into the diet one).
+#   depression : PHQ-9 score (0-27), DPQ_* questionnaire, cycles 2005-2014
+#   pesticide  : TCPy (urinary 3,5,6-trichloro-2-pyridinol, the chlorpyrifos
+#                organophosphate metabolite), creatinine-corrected + log, UPHOPM_*
+#                environmental subsample, cycles 2007-2014
+EXTRA_EXPOSURES = {
+    "phq9":      dict(label="Depression (PHQ-9)", per=5, unit="points",
+                      transform="none", cohort="depression"),
+    "tcpy_log":  dict(label="Pesticide (TCPy)",   per=1, unit="log µg/g creat (per SD)",
+                      transform="log_std", cohort="pesticide"),
+}
+DEPRESSION_CYCLES = ["2005-2006", "2007-2008", "2009-2010", "2011-2012", "2013-2014"]
+PESTICIDE_CYCLES = ["2007-2008", "2009-2010", "2011-2012", "2013-2014"]
+DPQ_ITEMS = [f"DPQ0{i}0" for i in range(1, 10)]  # 9 PHQ-9 items (DPQ100 excluded)
 
 
 # ------------------------------------------------------------------ downloads
@@ -102,29 +118,19 @@ def _mortality(cycle: str) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------- cohort build
+BASE_COVARS = ["age", "female", "race", "educ", "bmi", "smoke"]
+
+
+def _norm0(s: pd.Series) -> pd.Series:
+    """pandas read_sas encodes SAS zero as ~5.4e-79; snap those back to 0."""
+    return s.mask(s.abs() < 1e-8, 0.0)
+
+
 def _subset(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     keep = [c for c in cols if c in df.columns]
     out = df[keep].copy()
     out["SEQN"] = out["SEQN"].astype("int64")
     return out
-
-
-def load_cycle(cycle: str) -> pd.DataFrame:
-    """Merge one cycle's DEMO + DR1TOT + SMQ + BMX + mortality on SEQN."""
-    demo = _subset(_xpt(cycle, "DEMO"), DEMO_COLS)
-    diet = _subset(_xpt(cycle, "DR1TOT"), DIET_COLS)
-    smq = _subset(_xpt(cycle, "SMQ"), SMQ_COLS)
-    bmx = _subset(_xpt(cycle, "BMX"), BMX_COLS)
-    mort = _mortality(cycle)
-    mort["SEQN"] = mort["SEQN"].astype("int64")
-
-    df = (demo.merge(diet, on="SEQN", how="inner")
-              .merge(smq, on="SEQN", how="left")
-              .merge(bmx, on="SEQN", how="left")
-              .merge(mort, on="SEQN", how="inner"))
-    df["cycle"] = cycle
-    df["n_cycles"] = 0  # filled in build_cohort for weight pooling
-    return df
 
 
 def _smoking_status(row) -> float:
@@ -141,48 +147,98 @@ def _smoking_status(row) -> float:
     return np.nan
 
 
-def build_cohort(cycles: list[str] | None = None, min_age: int = 20,
-                 kcal_range: tuple[int, int] = (500, 5000)) -> pd.DataFrame:
-    """Pooled, cleaned analytic dataset ready for Cox modelling.
+def _base_frame(cycle: str) -> pd.DataFrame:
+    """Demographics + smoking + body measures + mortality, with the shared
+    outcomes and confounders. The common spine under every analytic cohort."""
+    demo = _subset(_xpt(cycle, "DEMO"), DEMO_COLS)
+    smq = _subset(_xpt(cycle, "SMQ"), SMQ_COLS)
+    bmx = _subset(_xpt(cycle, "BMX"), BMX_COLS)
+    mort = _mortality(cycle)
+    mort["SEQN"] = mort["SEQN"].astype("int64")
 
-    Inclusion: mortality-eligible adults (ELIGSTAT==1, age>=min_age), reliable
-    day-1 recall (DR1DRSTZ==1), plausible energy intake, complete covariates.
-    """
-    cycles = cycles or DEFAULT_CYCLES
-    parts = [load_cycle(c) for c in cycles]
-    df = pd.concat(parts, ignore_index=True)
-    df["n_cycles"] = len(cycles)
-
-    # outcome: cause-specific cancer death; time in years from exam date
+    df = (demo.merge(smq, on="SEQN", how="left")
+              .merge(bmx, on="SEQN", how="left")
+              .merge(mort, on="SEQN", how="inner"))
+    df["cycle"] = cycle
     df["time_years"] = df["PERMTH_EXM"] / 12.0
     df["event_cancer"] = ((df["MORTSTAT"] == 1) & (df["UCOD_LEADING"] == UCOD_CANCER)).astype(int)
     df["event_death"] = (df["MORTSTAT"] == 1).astype(int)
-
-    # covariates
     df["age"] = df["RIDAGEYR"]
     df["female"] = (df["RIAGENDR"] == 2).astype(int)
     df["race"] = df["RIDRETH1"].astype("Int64")            # 1..5 categorical
     df["educ"] = df["DMDEDUC2"].where(df["DMDEDUC2"] < 7)   # 7/9 = refused/dk
     df["bmi"] = df["BMXBMI"]
-    df["energy_kcal"] = df["DR1TKCAL"]
     df["smoke"] = df.apply(_smoking_status, axis=1)
-    # pooled MEC weight: divide 2-year weight by the number of pooled cycles
-    df["mec_weight"] = df["WTMEC2YR"] / df["n_cycles"]
+    return df
 
-    for key, spec in EXPOSURES.items():
-        df[key] = df[spec["col"]]
 
-    # inclusion filters
+def _finalize(df: pd.DataFrame, cycles: list[str], exposures: list[str],
+              extra_covars: list[str], weight_src: str, min_age: int) -> pd.DataFrame:
+    """Shared tail: pool weight, apply eligibility + completeness filters."""
+    df["n_cycles"] = len(cycles)
+    df["mec_weight"] = df[weight_src] / df["n_cycles"]   # pooled survey weight
+    need = BASE_COVARS + extra_covars + exposures
     keep = (
         (df["ELIGSTAT"] == 1)
         & (df["age"] >= min_age)
-        & (df["DR1DRSTZ"] == 1)
-        & df["energy_kcal"].between(*kcal_range)
         & df["time_years"].gt(0)
-        & df[["age", "female", "race", "educ", "bmi", "smoke", "energy_kcal"]].notna().all(axis=1)
-        & df[list(EXPOSURES)].notna().all(axis=1)
+        & df[need].notna().all(axis=1)
     )
     return df.loc[keep].reset_index(drop=True)
+
+
+def build_cohort(cycles: list[str] | None = None, min_age: int = 20,
+                 kcal_range: tuple[int, int] = (500, 5000)) -> pd.DataFrame:
+    """Diet cohort: mortality-eligible adults with a reliable day-1 recall,
+    plausible energy intake and complete confounders."""
+    cycles = cycles or DEFAULT_CYCLES
+    parts = []
+    for c in cycles:
+        df = _base_frame(c)
+        diet = _subset(_xpt(c, "DR1TOT"), DIET_COLS)
+        df = df.merge(diet, on="SEQN", how="inner")
+        df["energy_kcal"] = df["DR1TKCAL"]
+        for key, spec in EXPOSURES.items():
+            df[key] = df[spec["col"]]
+        df = df[(df["DR1DRSTZ"] == 1) & df["energy_kcal"].between(*kcal_range)]
+        parts.append(df)
+    df = pd.concat(parts, ignore_index=True)
+    return _finalize(df, cycles, list(EXPOSURES), ["energy_kcal"], "WTMEC2YR", min_age)
+
+
+def build_depression_cohort(cycles: list[str] | None = None, min_age: int = 20) -> pd.DataFrame:
+    """PHQ-9 depression cohort (DPQ_* questionnaire, cycles 2005-2014)."""
+    cycles = cycles or DEPRESSION_CYCLES
+    parts = []
+    for c in cycles:
+        df = _base_frame(c)
+        dpq = _subset(_xpt(c, "DPQ"), ["SEQN"] + DPQ_ITEMS)
+        for it in DPQ_ITEMS:
+            dpq[it] = _norm0(dpq[it]).where(dpq[it] < 4)   # 0-3 valid; 7/9 -> NaN
+        dpq["phq9"] = dpq[DPQ_ITEMS].sum(axis=1, min_count=len(DPQ_ITEMS))
+        parts.append(df.merge(dpq[["SEQN", "phq9"]], on="SEQN", how="inner"))
+    df = pd.concat(parts, ignore_index=True)
+    return _finalize(df, cycles, ["phq9"], [], "WTMEC2YR", min_age)
+
+
+def build_pesticide_cohort(cycles: list[str] | None = None, min_age: int = 20) -> pd.DataFrame:
+    """Pesticide (TCPy) cohort: chlorpyrifos metabolite, creatinine-corrected and
+    log-transformed, from the UPHOPM environmental subsample (cycles 2007-2014)."""
+    cycles = cycles or PESTICIDE_CYCLES
+    parts = []
+    for c in cycles:
+        df = _base_frame(c)
+        up = _subset(_xpt(c, "UPHOPM"), ["SEQN", "URXTCC", "WTSC2YR"])
+        cr = _subset(_xpt(c, "ALB_CR"), ["SEQN", "URXUCR"])
+        up = up.merge(cr, on="SEQN", how="left")
+        tcpy = _norm0(up["URXTCC"])                        # ng/mL
+        creat = up["URXUCR"] / 100.0                       # mg/dL -> g/L (≈ g/L creatinine)
+        # µg per gram creatinine; log for the right-skewed concentration
+        up["tcpy_log"] = np.log((tcpy / creat).where(creat > 0))
+        parts.append(df.merge(up[["SEQN", "tcpy_log", "WTSC2YR"]], on="SEQN", how="inner"))
+    df = pd.concat(parts, ignore_index=True)
+    df = df[np.isfinite(df["tcpy_log"])]
+    return _finalize(df, cycles, ["tcpy_log"], [], "WTSC2YR", min_age)
 
 
 # ------------------------------------------------------ energy adjustment
@@ -197,7 +253,9 @@ def energy_adjust(df: pd.DataFrame, nutrient: str, energy: str = "energy_kcal") 
 
 
 if __name__ == "__main__":
-    coh = build_cohort()
-    print(f"analytic n = {len(coh):,}  cancer deaths = {coh.event_cancer.sum():,}  "
-          f"all-cause deaths = {coh.event_death.sum():,}")
-    print(coh.groupby("cycle")[["event_cancer", "event_death"]].agg(["size", "sum"]))
+    for name, builder in [("diet", build_cohort),
+                          ("depression (PHQ-9)", build_depression_cohort),
+                          ("pesticide (TCPy)", build_pesticide_cohort)]:
+        coh = builder()
+        print(f"{name:20s} n = {len(coh):6,}  cancer deaths = {coh.event_cancer.sum():4,}  "
+              f"all-cause deaths = {coh.event_death.sum():5,}")

@@ -29,7 +29,10 @@ public prospective resource, for four exposures at once:
 
 This shows the machinery behind a number like "RR 1.15 per 10 g/day" — a
 confounder-adjusted, energy-adjusted Cox dose–response model — on open data that
-anyone can download without an application.
+anyone can download without an application. §5 then pushes **beyond diet** into two
+exposures that worry people but are rarely in these analyses — **pesticide exposure**
+(a urinary chlorpyrifos metabolite) and **psychological distress** (PHQ-9) — both of
+which NHANES happens to measure and link to the same mortality follow-up.
 
 ### Data (no login, no application)
 - **NHANES continuous** (CDC): demographics, day-1 24-hour dietary recall, smoking,
@@ -208,9 +211,62 @@ cmp = res[["exposure","HR_per_sd","lci_sd","uci_sd"]].merge(
 cmp.round(3)
 """)
 
-# ============================================================== §5 interpretation
+# ============================================================== §5 beyond diet
 md(r"""
-## 5 · Reading the results against WCRF
+## 5 · Beyond diet: pesticide exposure and psychological distress
+
+Two exposures people often ask about — and that the WCRF diet cohorts never measured —
+are already in NHANES and linked to the same mortality follow-up:
+
+- **Pesticide exposure** — urinary **TCPy** (3,5,6-trichloro-2-pyridinol, the
+  chlorpyrifos organophosphate metabolite), creatinine-corrected and log-transformed,
+  from NHANES' environmental-chemical **subsample** (2007–2014).
+- **Psychological distress** — the **PHQ-9** depression score (0–27) from the mental-
+  health questionnaire (2005–2014).
+
+Each lives in its own subsample/cycle set, so it gets its **own analytic cohort**
+(`N.build_pesticide_cohort` / `N.build_depression_cohort`) built on the same spine of
+confounders and mortality linkage. The pesticide subsample is small (~7k, ~200 cancer
+deaths), so we report **both** cancer-specific and all-cause mortality.
+""")
+
+code(r"""
+extra = C.run_extra(weighted=False)
+show = extra.copy()
+for c in ["HR_per_unit","lci_unit","uci_unit","HR_per_sd","lci_sd","uci_sd"]:
+    show[c] = show[c].round(3)
+show["p"] = show["p"].round(4)
+show[["exposure","outcome","per_unit","HR_per_unit","lci_unit","uci_unit","p","n","events"]]
+""")
+
+code(r"""
+# forest: all exposures on one per-SD scale. diet = cancer death; extra = both outcomes.
+diet = res[["exposure","HR_per_sd","lci_sd","uci_sd"]].assign(outcome="cancer death")
+ex = extra[["exposure","outcome","HR_per_sd","lci_sd","uci_sd"]]
+allrows = pd.concat([diet, ex], ignore_index=True)
+allrows["label"] = allrows.exposure + "  (" + allrows.outcome + ")"
+
+fig, ax = plt.subplots(figsize=(8, 4.6))
+y = np.arange(len(allrows))[::-1]
+colors = [RED if "all-cause" in o else BLUE for o in allrows.outcome]
+ax.errorbar(allrows.HR_per_sd, y,
+            xerr=[allrows.HR_per_sd - allrows.lci_sd, allrows.uci_sd - allrows.HR_per_sd],
+            fmt="none", ecolor=MUTED, capsize=4, zorder=2)
+ax.scatter(allrows.HR_per_sd, y, c=colors, s=55, edgecolor=INK, zorder=3)
+ax.axvline(1.0, color=MUTED, lw=1.1, ls="--", zorder=1)
+ax.set_yticks(y); ax.set_yticklabels(allrows.label, fontsize=9)
+ax.set_xlabel("Hazard ratio per 1 SD of (transformed) exposure")
+ax.set_title("All exposures → mortality (NHANES, adjusted Cox)")
+ax.scatter([], [], c=BLUE, edgecolor=INK, label="cancer death")
+ax.scatter([], [], c=RED, edgecolor=INK, label="all-cause death")
+ax.legend(frameon=False, loc="lower right", fontsize=9)
+ax.set_xlim(0.80, max(1.30, allrows.uci_sd.max() + 0.05))
+plt.tight_layout(); plt.show()
+""")
+
+# ============================================================== §6 interpretation
+md(r"""
+## 6 · Reading the results against WCRF
 
 A few patterns to expect, and why they are *scientifically* interesting rather than
 contradictory:
@@ -226,8 +282,13 @@ contradictory:
   diet, residual confounding (overall dietary pattern, SES) and the energy-partition
   problem mean these are *hypothesis-generating*, not causal.
 - **Confidence intervals here are random error only.** As in the sister notebook, they
-  do not capture measurement error or unmeasured confounding (stress, pollution,
-  radiation, ultra-processed foods are all absent), so the *true* uncertainty is wider.
+  do not capture measurement error or unmeasured confounding, so the *true* uncertainty
+  is wider.
+- **Distress tracks mortality strongly, pesticide weakly.** PHQ-9 is a clear predictor of
+  *all-cause* death (and modestly of cancer death) — but reverse causation looms large
+  (illness causes distress), so this is association, not a causal diet-style effect.
+  Urinary TCPy is near-null, as expected: a single spot urine is a poor proxy for chronic
+  pesticide exposure, so any true signal is heavily diluted.
 
 **Takeaway.** The same Cox/energy-adjustment machinery that underlies WCRF's per-10g
 numbers is reproducible on open data in a few hundred lines — but reproducing WCRF's
@@ -235,23 +296,29 @@ numbers is reproducible on open data in a few hundred lines — but reproducing 
 NHANES' single recall cannot provide.
 """)
 
-# ============================================================== §6 extend
+# ============================================================== §7 extend
 md(r"""
-## 6 · Extending the template
+## 7 · Extending the template
 
 The pipeline is deliberately factored so the hard parts are swappable:
 
 - **Better exposure.** Use the 2-day average (`DR1`+`DR2`) or the ALQ alcohol
   questionnaire for usual intake; add the USDA FPED merge for *added* sugars.
-- **Incidence, not mortality.** Point `N.build_cohort` at a cohort with incident-cancer
-  follow-up. The natural upgrade is **UK Biobank** (cancer-registry linked, ~500k,
-  plus pollution/SES/genetics) — swap the loader, keep `nhanes_cox` almost verbatim.
+- **Incidence, not mortality.** Point the cohort builder at a dataset with incident-cancer
+  follow-up. The fastest open route is **PLCO via NCI's CDAS portal** (diet-history
+  questionnaire + incident cancers); the richest is **UK Biobank** (cancer-registry linked,
+  ~500k). Either way `nhanes_cox` carries over almost verbatim — only the loader and the
+  event definition change.
+- **Air pollution.** *Not* reachable from public NHANES: linking NO₂/PM₂.₅ needs residential
+  geography, which NHANES withholds below the region level (a Research Data Center is
+  required). **UK Biobank ships modelled NO₂/PM₂.₅/PM₁₀ per participant**, so pollution comes
+  bundled with the same incidence upgrade.
 - **Causal identification.** Add a Mendelian-randomisation arm (ALDH2/ADH variants)
   to probe alcohol causality free of lifestyle confounding.
 
-Modules: `src/nhanes_pipeline.py` (download + cohort + energy adjustment),
-`src/nhanes_cox.py` (Cox estimation). Rebuild this notebook with
-`.venv/bin/python src/build_nhanes_notebook.py`.
+Modules: `src/nhanes_pipeline.py` (download + three cohort builders + energy adjustment),
+`src/nhanes_cox.py` (Cox estimation for diet and environmental/psychosocial exposures).
+Rebuild this notebook with `.venv/bin/python src/build_nhanes_notebook.py`.
 
 ---
 *Sources: NHANES continuous (CDC/NCHS) · NHANES Public-Use Linked Mortality Files
