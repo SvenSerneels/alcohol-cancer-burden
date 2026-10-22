@@ -1,0 +1,7 @@
+param,value,description
+beta1,0.05593,coefficient on x (g/day) in RR=exp(beta1*x + beta2*x*ln(x))
+beta2,-0.00789,coefficient on x*ln(x)
+var_b1,0.00006500,variance of beta1
+var_b2,0.00000264,variance of beta2
+cov_b1_b2,-0.00001000,covariance beta1 beta2
+source,Shield2018_Bagnardi2015,France PAF study / Bagnardi et al. 2015 meta-analysis

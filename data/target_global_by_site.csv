@@ -1,0 +1,10 @@
+site,label,icd10,male_cases,male_cases_lci,male_cases_uci,male_paf_pct,female_cases,female_cases_lci,female_cases_uci,female_paf_pct,total_cases,total_cases_lci,total_cases_uci,total_paf_pct,total_asr
+oral_cavity,Lip and oral cavity cancer,C00-C06,66700,40000,105300,25.9,8200,4600,14300,7.3,74900,44600,119600,20.2,0.9
+pharynx,Pharyngeal cancer,C09-C10;C12-C13,37000,15200,63400,25.3,2500,940,4400,7.4,39400,16100,67800,22.0,0.5
+oesophagus_scc,Oesophageal cancer (SCC),C15,163100,94200,231000,39.2,26600,16700,43700,14.3,189700,110900,274600,31.6,2.1
+colon,Colon cancer,C18,76900,57700,95400,13.0,14600,10600,19100,2.7,91500,68300,114500,8.1,1.0
+rectum,Rectal cancer,C19-C20,57300,42700,71800,13.0,7800,5800,10300,2.7,65100,48500,82000,9.0,0.7
+liver_hcc,Liver cancer (HCC),C22,141300,39600,255000,22.7,13400,4100,26400,5.0,154700,43700,281500,17.3,1.7
+larynx,Laryngeal cancer,C32,26400,15100,41600,16.6,1200,620,1700,4.7,27600,15700,43300,15.0,0.3
+breast,Breast cancer,C50,0,0,0,0.0,98300,68200,130500,4.4,98300,68200,130500,4.4,1.1
+all_sites,All sites excl. non-melanoma skin,C00-C97 excl C44,568700,422500,731100,6.1,172600,135900,220100,2.0,741300,558500,951200,4.1,8.4

@@ -1,0 +1,8 @@
+region,sex,moderate_cases,moderate_pct,risky_cases,risky_pct,heavy_cases,heavy_pct,note
+World,both,103100,13.9,291800,39.4,346400,46.7,Suppl Table 5 / main text
+Eastern Africa,male,550,9.1,1900,30.9,3600,60.0,Suppl Table 5
+Eastern Africa,female,650,28.4,960,42.0,680,29.5,Suppl Table 5
+Eastern Africa,both,1200,14.4,2800,34.0,4300,51.6,Suppl Table 5
+Eastern Asia,male,27800,10.1,107900,39.1,140200,50.8,Suppl Table 5
+Eastern Asia,female,22600,40.2,28200,50.1,5400,9.7,Suppl Table 5
+Eastern Asia,both,50400,15.2,136100,41.0,145700,43.9,Suppl Table 5

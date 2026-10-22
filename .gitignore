@@ -1,0 +1,14 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Re-downloadable NHANES cache (rebuilt by src/nhanes_pipeline.py)
+data/nhanes/
+
+# Local Claude Code settings & scratch
+.claude/settings.local.json
+*.log

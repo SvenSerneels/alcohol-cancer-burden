@@ -1,0 +1,11 @@
+site,rr_per_10g,lci,uci,var_logrr,dose_threshold_gday,age_condition,source,note
+oral_cavity,1.15,1.09,1.22,0.002874315370003,0,all,WCRF 2016,log-linear per 10 g/day
+pharynx,1.13,1.05,1.21,0.003618117230592,0,all,WCRF 2016,log-linear per 10 g/day
+colon,1.07,1.05,1.08,0.000718644820579,20,all,WCRF 2017,no excess risk below 20 g/day
+rectum,1.07,1.05,1.08,0.000718644820579,20,all,WCRF 2017,no excess risk below 20 g/day
+liver_hcc,1.14,1.04,1.25,0.004691909136758,0,all,WCRF 2015,HCC-specific dose-response
+larynx,1.09,1.05,1.13,0.001873149708031,0,all,WCRF 2016,log-linear per 10 g/day
+breast_premeno,1.04,1.01,1.08,0.001709456894973,0,age_lt_50,WCRF 2017,females only; premenopausal proxy age<50
+breast_postmeno,1.08,1.05,1.10,0.001186735092727,0,age_ge_50,WCRF 2017,females only; postmenopausal proxy age>=50
+pancreas,1.17,1.05,1.29,0.003500885275581,45,all,WCRF 2012,sensitivity analysis only; risk above 45 g/day
+stomach,1.02,1.00,1.04,0.001000528396767,45,all,WCRF 2015,sensitivity analysis only; risk above 45 g/day
