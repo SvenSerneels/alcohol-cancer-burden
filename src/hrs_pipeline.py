@@ -34,11 +34,17 @@ HRS_DTA = DATA / "hrs" / "randhrs1992_2022v1.dta"
 
 WAVES = range(1, 17)                      # 1992 (w1) .. 2022 (w16)
 FIXED = ["hhidpn", "ragender", "raracem", "rahispan", "raeduc", "rabyear", "radyear"]
-WAVEVARS = ["iwstat", "agey_e", "cancre", "cancr", "cesd", "bmi", "smokev", "smoken", "wtresp"]
+WAVEVARS = ["iwstat", "agey_e", "cancre", "cancr", "cesd", "bmi", "smokev", "smoken",
+            "wtresp", "drink", "drinkd", "drinkn"]
+GRAMS_PER_DRINK = 14.0                     # US standard drink ≈ 14 g ethanol
 
-# Exposure available directly in the RAND file (perceived stress needs the LB file).
+# Exposures available directly in the RAND file. Diet nutrients (fat, sugar, ...)
+# are NOT in HRS core -- they need the 2013 Health Care & Nutrition Study FFQ.
+#   cesd      : CES-D depression score (0-8), waves 2-16
+#   alcohol_g : usual ethanol g/day = days/week x drinks/day x 14 / 7, waves 3-16
 EXPOSURES = {
-    "cesd": dict(col="cesd", label="Depression (CES-D)", per=1, unit="points", transform="none"),
+    "cesd":      dict(label="Depression (CES-D)", per=1,  unit="points", transform="none"),
+    "alcohol_g": dict(label="Alcohol",            per=10, unit="g/day",  transform="none"),
 }
 
 
@@ -77,13 +83,29 @@ def _smoke(row) -> float:
     return np.nan
 
 
-def build_cohort(min_age: int = 50) -> pd.DataFrame:
-    """One survival record per respondent, ready for nhanes_cox.fit_exposure."""
-    long = _to_long(_read_columns())
+def _alcohol_gday(long: pd.DataFrame) -> pd.Series:
+    """Usual ethanol g/day from frequency x quantity; non-drinkers -> 0."""
+    dr, dd, dn = long["drink"], long["drinkd"], long["drinkn"]
+    g = (dd * dn / 7.0) * GRAMS_PER_DRINK
+    g = g.where(dd.notna() & dn.notna())        # drinker with missing qty -> NaN
+    g = g.mask(dr == 0, 0.0)                     # explicit non-drinker -> 0
+    g = g.mask(dr.isna(), np.nan)
+    return g
 
-    # eligibility at a wave: interviewed, complete covariates, aged >= min_age
+
+def build_cohort(exposures=("cesd", "alcohol_g"), min_age: int = 50) -> pd.DataFrame:
+    """One survival record per respondent, ready for nhanes_cox.fit_exposure.
+
+    `exposures` lists which exposure columns must be present at the entry wave
+    (they are captured at baseline). Pass a single-item tuple to maximise the
+    cohort for one exposure (e.g. alcohol needs waves >=3, CES-D >=2)."""
+    long = _to_long(_read_columns())
     long["smoke"] = long.apply(_smoke, axis=1)
-    need = ["agey_e", "cesd", "bmi", "smoke", "raeduc"]
+    long["alcohol_g"] = _alcohol_gday(long)
+
+    # eligibility at a wave: interviewed, aged >= min_age, complete covariates
+    # AND complete for every requested exposure (captured at baseline).
+    need = ["agey_e", "bmi", "smoke", "raeduc"] + list(exposures)
 
     rows = []
     for pid, g in long.sort_values("wave").groupby("hhidpn", sort=False):
@@ -114,15 +136,18 @@ def build_cohort(min_age: int = 50) -> pd.DataFrame:
         # race: 1 NH-white, 2 NH-black, 3 Hispanic, 4 other
         race = (3 if base["rahispan"] == 1 else
                 {1: 1, 2: 2, 3: 4}.get(base["raracem"], 4))
-        rows.append(dict(
+        rec = dict(
             hhidpn=pid, time_years=time, event_cancer=int(event),
             event_death=int(pd.notna(base["radyear"]) and base["radyear"] > 0),
             age=float(entry_age), female=int(base["ragender"] == 2),
             race=race, educ=float(base["raeduc"]), bmi=float(base["bmi"]),
-            smoke=float(base["smoke"]), cesd=float(base["cesd"]),
+            smoke=float(base["smoke"]),
             mec_weight=float(base["wtresp"]) if pd.notna(base["wtresp"]) else np.nan,
             entry_wave=int(entry_wave),
-        ))
+        )
+        for k in EXPOSURES:
+            rec[k] = float(base[k]) if pd.notna(base[k]) else np.nan
+        rows.append(rec)
     coh = pd.DataFrame(rows)
     coh["race"] = coh["race"].astype("Int64")
     return coh
@@ -132,18 +157,16 @@ if __name__ == "__main__":
     import pandas as pd
     import nhanes_cox as C
 
-    coh = build_cohort()
-    print(f"HRS incident-cancer cohort: n = {len(coh):,}")
-    print(f"  incident cancers = {coh.event_cancer.sum():,}")
-    print(f"  median follow-up = {coh.time_years.median():.1f} years, "
-          f"total person-years = {coh.time_years.sum():,.0f}")
-    print(f"  mean entry age   = {coh.age.mean():.1f}\n")
-
-    rows = [C.fit_exposure(coh, "cesd", EXPOSURES["cesd"], event_col=ev)
-            for ev in ("event_cancer", "event_death")]
-    res = pd.DataFrame(rows)[C.COLS]
-    res["outcome"] = res["outcome"].replace({"cancer death": "incident cancer"})
     pd.set_option("display.width", 170)
     pd.set_option("display.max_columns", 20)
-    print("CES-D depression (reusing nhanes_cox, confounder-adjusted Cox):\n")
+    rows = []
+    for key, spec in EXPOSURES.items():
+        coh = build_cohort(exposures=(key,))          # own cohort per exposure
+        print(f"{spec['label']:20s}: n = {len(coh):,}  incident cancers = "
+              f"{coh.event_cancer.sum():,}  person-years = {coh.time_years.sum():,.0f}")
+        for ev in ("event_cancer", "event_death"):
+            rows.append(C.fit_exposure(coh, key, spec, event_col=ev))
+    res = pd.DataFrame(rows)[C.COLS]
+    res["outcome"] = res["outcome"].replace({"cancer death": "incident cancer"})
+    print("\nHRS exposures -> incident cancer / all-cause death (adjusted Cox):\n")
     print(res.round(3).to_string(index=False))
